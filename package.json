@@ -1,0 +1,10 @@
+{
+  "name": "codex-crm",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "npm --prefix backend install && npm --prefix backend run dev",
+    "start": "npm --prefix backend run start",
+    "install:all": "npm --prefix backend install"
+  }
+}
