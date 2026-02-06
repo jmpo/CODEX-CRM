@@ -1,0 +1,17 @@
+{
+  "name": "codex-crm-backend",
+  "version": "0.1.0",
+  "description": "MVP CRM API for Facebook Lead Forms + Meta Conversions",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "morgan": "^1.10.0",
+    "uuid": "^9.0.1"
+  }
+}
