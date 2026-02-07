@@ -1,4 +1,11 @@
-require("dotenv").config();
+const fs = require("fs");
+const path = require("path");
+const rootEnvPath = path.resolve(__dirname, "..", "..", ".env");
+if (fs.existsSync(rootEnvPath)) {
+  require("dotenv").config({ path: rootEnvPath });
+} else {
+  require("dotenv").config();
+}
 const express = require("express");
 const morgan = require("morgan");
 const crypto = require("crypto");
@@ -42,7 +49,8 @@ const META_APP_ID = process.env.META_APP_ID;
 const META_APP_SECRET = process.env.META_APP_SECRET;
 const META_REDIRECT_URI = process.env.META_REDIRECT_URI;
 const META_APP_SCOPES =
-  process.env.META_APP_SCOPES || "pages_read_engagement,leads_retrieval,pages_manage_metadata";
+  process.env.META_APP_SCOPES ||
+  "pages_read_engagement,leads_retrieval,pages_show_list,pages_manage_metadata";
 
 const oauthStateStore = new Map();
 
@@ -64,7 +72,8 @@ app.get("/auth/meta/start", (req, res) => {
     return res.status(500).json({ error: "META_APP_ID/META_REDIRECT_URI missing" });
   }
 
-  const state = createOauthState(req.query?.tenant);
+  const redirectUri = resolveRedirectUri(req, req.query?.redirect);
+  const state = createOauthState({ tenantId: req.query?.tenant, redirectUri });
   const url = `${META_OAUTH_BASE}?client_id=${META_APP_ID}&redirect_uri=${encodeURIComponent(
     META_REDIRECT_URI
   )}&state=${state}&scope=${encodeURIComponent(META_APP_SCOPES)}`;
@@ -74,7 +83,23 @@ app.get("/auth/meta/start", (req, res) => {
 
 app.get("/auth/meta/callback", async (req, res) => {
   const { code, state, error, error_description: errorDescription } = req.query;
+  let oauthState = null;
+  if (state) {
+    try {
+      oauthState = validateOauthState(String(state));
+    } catch (err) {
+      return res.status(400).json({ error: err?.message || "Invalid OAuth state" });
+    }
+  }
+
   if (error) {
+    if (oauthState?.redirectUri) {
+      const redirect = buildRedirectUrl(oauthState.redirectUri, {
+        ok: "0",
+        error: String(error),
+      });
+      return res.redirect(redirect);
+    }
     return res.status(400).json({ error, errorDescription });
   }
   if (!code || !state) {
@@ -82,7 +107,7 @@ app.get("/auth/meta/callback", async (req, res) => {
   }
 
   try {
-    const tenantId = validateOauthState(String(state));
+    const tenantId = oauthState?.tenantId ?? null;
     const accessToken = await exchangeCodeForToken(String(code));
     const pages = await fetchUserPages(accessToken);
     const stored = [];
@@ -99,6 +124,14 @@ app.get("/auth/meta/callback", async (req, res) => {
       await subscribePageToWebhook(page.id, page.access_token);
     }
 
+    if (oauthState?.redirectUri) {
+      const redirect = buildRedirectUrl(oauthState.redirectUri, {
+        ok: "1",
+        pages: String(stored.length),
+      });
+      return res.redirect(redirect);
+    }
+
     res.json({ ok: true, pages: stored.length, stored });
   } catch (err) {
     handleServerError(res, err);
@@ -107,7 +140,8 @@ app.get("/auth/meta/callback", async (req, res) => {
 
 app.get("/auth/meta/pages", async (req, res) => {
   try {
-    const pages = await listFacebookPages();
+    const tenantId = typeof req.query?.tenant === "string" ? req.query.tenant : null;
+    const pages = await listFacebookPages({ tenantId });
     res.json({ data: pages });
   } catch (err) {
     handleServerError(res, err);
@@ -334,21 +368,68 @@ function handleServerError(res, err) {
   res.status(500).json({ error: message });
 }
 
-function createOauthState(tenantId) {
-  const raw = crypto.randomBytes(16).toString("hex");
-  const state = tenantId ? `${raw}:${tenantId}` : raw;
-  oauthStateStore.set(state, Date.now());
+function createOauthState({ tenantId, redirectUri }) {
+  const state = crypto.randomBytes(16).toString("hex");
+  oauthStateStore.set(state, {
+    createdAt: Date.now(),
+    tenantId: tenantId || null,
+    redirectUri: redirectUri || null,
+  });
   return state;
 }
 
 function validateOauthState(state) {
-  const createdAt = oauthStateStore.get(state);
-  if (!createdAt) {
+  const stored = oauthStateStore.get(state);
+  if (!stored) {
     throw new Error("Invalid OAuth state");
   }
   oauthStateStore.delete(state);
-  const parts = state.split(":");
-  return parts.length > 1 ? parts.slice(1).join(":") : null;
+  return stored;
+}
+
+function resolveRedirectUri(req, redirect) {
+  if (!redirect || typeof redirect !== "string") return null;
+  let requested;
+  try {
+    requested = new URL(redirect);
+  } catch {
+    return null;
+  }
+
+  if (!["http:", "https:"].includes(requested.protocol)) return null;
+
+  const originHeader = req.get("origin") || req.get("referer");
+  if (originHeader) {
+    try {
+      const origin = new URL(originHeader).origin;
+      if (origin === requested.origin) {
+        return requested.toString();
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  const allowlist = (process.env.META_OAUTH_REDIRECT_ALLOWLIST || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  if (allowlist.includes(requested.origin)) {
+    return requested.toString();
+  }
+
+  return null;
+}
+
+function buildRedirectUrl(baseUrl, params) {
+  const url = new URL(baseUrl);
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      url.searchParams.set(key, String(value));
+    }
+  });
+  return url.toString();
 }
 
 async function exchangeCodeForToken(code) {

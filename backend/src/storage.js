@@ -262,14 +262,20 @@ async function getFacebookPageToken(pageId) {
   return data?.access_token || null;
 }
 
-async function listFacebookPages() {
+async function listFacebookPages({ tenantId } = {}) {
   if (!useSupabase) {
-    return Array.from(facebookPages.values());
+    const pages = Array.from(facebookPages.values());
+    if (!tenantId) return pages;
+    return pages.filter((page) => page.tenantId === tenantId);
   }
 
-  const { data, error } = await supabase.from(pagesTable).select("*").order("created_at", {
+  let query = supabase.from(pagesTable).select("*").order("created_at", {
     ascending: false,
   });
+  if (tenantId) {
+    query = query.eq("tenant_id", tenantId);
+  }
+  const { data, error } = await query;
 
   if (error) {
     throw error;

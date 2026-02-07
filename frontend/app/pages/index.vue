@@ -12,6 +12,9 @@
         <button class="btn btn-secondary" type="button" @click="loadLeads">
           Refrescar
         </button>
+        <button class="btn btn-primary" type="button" @click="startMetaOAuth">
+          Conectar Meta
+        </button>
       </div>
     </section>
 
@@ -26,6 +29,24 @@
         <span class="chip">Nuevo: {{ groupedLeads.nuevo.length }}</span>
         <span class="chip">Contactado: {{ groupedLeads.contactado.length }}</span>
         <span class="chip">Cualificado: {{ groupedLeads.cualificado.length }}</span>
+      </div>
+    </section>
+
+    <section class="card form-card">
+      <strong>Meta Pages conectadas</strong>
+      <div class="status" v-if="pagesLoading">Cargando páginas...</div>
+      <div class="status" v-else-if="pagesError">Error: {{ pagesError }}</div>
+      <div class="pages" v-else>
+        <div v-if="pages.length === 0" class="status">
+          Aún no hay páginas conectadas. Usa “Conectar Meta”.
+        </div>
+        <div v-for="page in pages" :key="page.id" class="page-card">
+          <div>
+            <strong>{{ page.name || 'Página' }}</strong>
+            <span class="status">ID: {{ page.pageId }}</span>
+          </div>
+          <span class="tag">Meta</span>
+        </div>
       </div>
     </section>
 
@@ -105,6 +126,10 @@ const leads = ref([])
 const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
+const pages = ref([])
+const pagesLoading = ref(false)
+const pagesError = ref('')
+const tenantId = 'local'
 
 const form = reactive({
   fullName: '',
@@ -148,6 +173,30 @@ async function loadLeads() {
   } finally {
     loading.value = false
   }
+}
+
+async function loadPages() {
+  pagesLoading.value = true
+  pagesError.value = ''
+  try {
+    const response = await $fetch(`${apiBase}/auth/meta/pages`, {
+      params: { tenant: tenantId }
+    })
+    pages.value = response?.data || []
+  } catch (err) {
+    pagesError.value = err?.data?.error || err?.message || 'No se pudo cargar'
+  } finally {
+    pagesLoading.value = false
+  }
+}
+
+function startMetaOAuth() {
+  if (typeof window === 'undefined') return
+  const redirect = `${window.location.origin}/meta/connected`
+  const url = `${apiBase}/auth/meta/start?redirect=${encodeURIComponent(
+    redirect
+  )}&tenant=${encodeURIComponent(tenantId)}`
+  window.location.href = url
 }
 
 async function createLead() {
@@ -237,4 +286,5 @@ async function onDrop(stageKey) {
 }
 
 onMounted(loadLeads)
+onMounted(loadPages)
 </script>

@@ -61,6 +61,10 @@ CRM Frontend (Kanban)
 4. Guardar lead en DB.
 5. Enviar notificación (opcional).
 
+**Requisitos Meta (OAuth + permisos)**
+- El OAuth debe incluir permisos: `pages_read_engagement`, `pages_show_list`, `leads_retrieval` y **`pages_manage_metadata`**.
+- Si falta `pages_manage_metadata`, la suscripción del webhook a la página falla y no llegan leads.
+
 ### 2) Movimiento en Kanban
 1. Usuario cambia etapa en UI.
 2. Backend actualiza `lead.stage`.
