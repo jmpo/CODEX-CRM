@@ -16,7 +16,9 @@ const { buildMetaPayload, sendMetaEvent } = require("./metaClient");
 const {
   createLead,
   listLeads,
+  getLeadById,
   findLeadByMetaId,
+  findLeadByEmail,
   updateLeadStage,
   addLeadEvent,
   upsertFacebookPage,
@@ -51,6 +53,13 @@ const META_REDIRECT_URI = process.env.META_REDIRECT_URI;
 const META_APP_SCOPES =
   process.env.META_APP_SCOPES ||
   "pages_read_engagement,leads_retrieval,pages_show_list,pages_manage_metadata";
+const CRM_WEBHOOK_URL = process.env.CRM_WEBHOOK_URL;
+const CRM_WEBHOOK_SECRET = process.env.CRM_WEBHOOK_SECRET;
+const CRM_WEBHOOK_TIMEOUT_MS = Number(process.env.CRM_WEBHOOK_TIMEOUT_MS || 5000);
+const CRM_SHEETS_READ_URL = process.env.CRM_SHEETS_READ_URL;
+const CRM_SHEETS_URL = process.env.CRM_SHEETS_URL;
+const CRM_SHEETS_TAB = process.env.CRM_SHEETS_TAB || "Hoja 2";
+const CRM_SHEETS_TIMEOUT_MS = Number(process.env.CRM_SHEETS_TIMEOUT_MS || 5000);
 
 const oauthStateStore = new Map();
 
@@ -243,10 +252,18 @@ app.patch("/leads/:id", async (req, res) => {
   }
 
   try {
-    const lead = await updateLeadStage(id, stage);
-    if (!lead) {
+    const existing = await getLeadById(id);
+    if (!existing) {
       return res.status(404).json({ error: "Lead not found" });
     }
+    const previousStage = existing.stage;
+
+    const lead = await updateLeadStage(id, stage);
+    const webhookResult = await emitStageWebhook({
+      lead,
+      previousStage,
+      nextStage: stage,
+    });
 
     const eventName = mapStageToMetaEvent(stage);
     let metaResponse = null;
@@ -283,7 +300,7 @@ app.patch("/leads/:id", async (req, res) => {
       });
     }
 
-    res.json({ data: lead, meta: metaResponse });
+    res.json({ data: lead, meta: metaResponse, webhook: webhookResult });
   } catch (err) {
     handleServerError(res, err);
   }
@@ -322,6 +339,86 @@ app.post("/events/meta", async (req, res) => {
     res.json({ ok: true, meta: metaResponse });
   } catch (err) {
     handleServerError(res, err);
+  }
+});
+
+app.get("/integrations/sheets", async (req, res) => {
+  if (!CRM_SHEETS_READ_URL || !CRM_SHEETS_URL) {
+    return res.status(400).json({ error: "Sheets integration not configured" });
+  }
+
+  const tab = typeof req.query?.tab === "string" ? req.query.tab : CRM_SHEETS_TAB;
+
+  try {
+    const response = await axios.post(
+      CRM_SHEETS_READ_URL,
+      { sheet_url: CRM_SHEETS_URL, tab_name: tab },
+      {
+        timeout: CRM_SHEETS_TIMEOUT_MS,
+        validateStatus: (status) => status >= 200 && status < 300,
+      }
+    );
+
+    const raw = response.data;
+    const rows = Array.isArray(raw)
+      ? raw
+      : Array.isArray(raw?.rows)
+        ? raw.rows
+        : Array.isArray(raw?.data)
+          ? raw.data
+          : [];
+
+    res.json({ data: rows, sheetUrl: CRM_SHEETS_URL, tab });
+  } catch (err) {
+    const message = err?.response?.data || err?.message || "Sheets fetch failed";
+    res.status(502).json({ error: message });
+  }
+});
+
+app.post("/integrations/sheets/import", async (req, res) => {
+  if (!CRM_SHEETS_READ_URL || !CRM_SHEETS_URL) {
+    return res.status(400).json({ error: "Sheets integration not configured" });
+  }
+
+  const tab = typeof req.query?.tab === "string" ? req.query.tab : CRM_SHEETS_TAB;
+
+  try {
+    const rows = await fetchSheetRows({ tab });
+    const results = { created: 0, updated: 0, skipped: 0, total: rows.length };
+
+    for (const row of rows) {
+      const mapped = mapSheetRowToLead(row);
+      if (!mapped) {
+        results.skipped += 1;
+        continue;
+      }
+
+      let existing = null;
+      if (mapped.leadId) {
+        existing = await findLeadByMetaId(mapped.leadId);
+      }
+      if (!existing && mapped.email) {
+        existing = await findLeadByEmail(mapped.email);
+      }
+
+      if (existing) {
+        if (mapped.stage && existing.stage !== mapped.stage) {
+          await updateLeadStage(existing.id, mapped.stage);
+          results.updated += 1;
+        } else {
+          results.skipped += 1;
+        }
+        continue;
+      }
+
+      await createLead(mapped);
+      results.created += 1;
+    }
+
+    res.json({ ok: true, ...results });
+  } catch (err) {
+    const message = err?.response?.data || err?.message || "Sheets import failed";
+    res.status(502).json({ error: message });
   }
 });
 
@@ -430,6 +527,145 @@ function buildRedirectUrl(baseUrl, params) {
     }
   });
   return url.toString();
+}
+
+async function fetchSheetRows({ tab }) {
+  const response = await axios.post(
+    CRM_SHEETS_READ_URL,
+    { sheet_url: CRM_SHEETS_URL, tab_name: tab },
+    {
+      timeout: CRM_SHEETS_TIMEOUT_MS,
+      validateStatus: (status) => status >= 200 && status < 300,
+    }
+  );
+
+  const raw = response.data;
+  return Array.isArray(raw)
+    ? raw
+    : Array.isArray(raw?.rows)
+      ? raw.rows
+      : Array.isArray(raw?.data)
+        ? raw.data
+        : [];
+}
+
+function normalizeSheetKey(key) {
+  return String(key || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+}
+
+function mapSheetRowToLead(row) {
+  if (!row || typeof row !== "object") return null;
+  const normalized = {};
+  Object.entries(row).forEach(([key, value]) => {
+    normalized[normalizeSheetKey(key)] = value;
+  });
+
+  const fullName =
+    normalized.full_name ||
+    normalized.fullname ||
+    normalized.nombre ||
+    normalized.name ||
+    normalized["full_name"] ||
+    normalized["full name"];
+  const email = normalized.email || normalized.mail;
+  const phone = normalized.phone || normalized.telefono || normalized.telefono_celular;
+  const leadId =
+    normalized.meta_lead_id ||
+    normalized.lead_id ||
+    normalized.id ||
+    normalized.leadid ||
+    null;
+
+  const leadStatus = String(normalized.lead_status || normalized.read_status || "").trim();
+  let stage = "nuevo";
+  if (leadStatus) {
+    const status = leadStatus.toLowerCase();
+    if (status.includes("convertido")) stage = "cerrado_venta";
+    else if (status.includes("no")) stage = "cerrado_no_venta";
+  }
+
+  if (!fullName && !email && !phone) return null;
+
+  return {
+    leadId,
+    fullName: fullName || "Sin nombre",
+    email,
+    phone,
+    source: "sheet",
+    stage,
+  };
+}
+
+function signWebhookPayload(secret, timestamp, payload) {
+  const base = `${timestamp}.${payload}`;
+  return crypto.createHmac("sha256", secret).update(base).digest("hex");
+}
+
+async function emitStageWebhook({ lead, previousStage, nextStage, tenantId = null }) {
+  if (!CRM_WEBHOOK_URL || !lead) return null;
+
+  const event = {
+    event: "lead_stage_changed",
+    event_id: crypto.randomUUID(),
+    occurred_at: new Date().toISOString(),
+    tenant_id: tenantId,
+    lead: {
+      id: lead.id,
+      meta_lead_id: lead.leadId || null,
+      full_name: lead.fullName,
+      email: lead.email,
+      phone: lead.phone,
+      source: lead.source,
+    },
+    stage: {
+      from: previousStage,
+      to: nextStage,
+    },
+  };
+
+  const payload = JSON.stringify(event);
+  const headers = {
+    "Content-Type": "application/json",
+    "User-Agent": "codex-crm/1.0",
+  };
+
+  if (CRM_WEBHOOK_SECRET) {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    headers["x-crm-timestamp"] = timestamp;
+    headers["x-crm-signature"] = signWebhookPayload(CRM_WEBHOOK_SECRET, timestamp, payload);
+  }
+
+  try {
+    const response = await axios.post(CRM_WEBHOOK_URL, payload, {
+      headers,
+      timeout: CRM_WEBHOOK_TIMEOUT_MS,
+      validateStatus: (status) => status >= 200 && status < 300,
+    });
+
+    await addLeadEvent({
+      leadId: lead.id,
+      eventName: "webhook_lead_stage_changed",
+      payload: { ok: true, status: response.status, data: response.data, event },
+    });
+
+    return { ok: true, status: response.status };
+  } catch (err) {
+    const errorPayload = err?.response?.data || err?.message || "Webhook failed";
+    try {
+      await addLeadEvent({
+        leadId: lead.id,
+        eventName: "webhook_lead_stage_changed",
+        payload: { ok: false, error: errorPayload, event },
+      });
+    } catch (logErr) {
+      console.error("Failed logging webhook event", logErr);
+    }
+    console.error("Webhook failed", errorPayload);
+    return { ok: false, error: errorPayload };
+  }
 }
 
 async function exchangeCodeForToken(code) {

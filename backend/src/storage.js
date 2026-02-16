@@ -71,7 +71,7 @@ function mapRowToPage(row) {
   };
 }
 
-async function createLead({ leadId, fullName, email, phone, source = "facebook" }) {
+async function createLead({ leadId, fullName, email, phone, source = "facebook", stage }) {
   if (!useSupabase) {
     const id = uuidv4();
     const now = new Date().toISOString();
@@ -82,7 +82,7 @@ async function createLead({ leadId, fullName, email, phone, source = "facebook" 
       email,
       phone,
       source,
-      stage: "nuevo",
+      stage: stage || "nuevo",
       createdAt: now,
       updatedAt: now,
     };
@@ -97,7 +97,7 @@ async function createLead({ leadId, fullName, email, phone, source = "facebook" 
       email,
       phone,
       source,
-      stage: "nuevo",
+      stage: stage || "nuevo",
       meta_lead_id: leadId || null,
     })
     .select("*")
@@ -126,6 +126,20 @@ async function listLeads() {
   return (data || []).map(mapRowToLead);
 }
 
+async function getLeadById(id) {
+  if (!id) return null;
+  if (!useSupabase) {
+    return leads.get(id) || null;
+  }
+
+  const { data, error } = await supabase.from(leadsTable).select("*").eq("id", id).maybeSingle();
+  if (error) {
+    throw error;
+  }
+
+  return mapRowToLead(data);
+}
+
 async function findLeadByMetaId(metaLeadId) {
   if (!metaLeadId) return null;
   if (!useSupabase) {
@@ -141,6 +155,23 @@ async function findLeadByMetaId(metaLeadId) {
     .eq("meta_lead_id", metaLeadId)
     .maybeSingle();
 
+  if (error) {
+    throw error;
+  }
+
+  return mapRowToLead(data);
+}
+
+async function findLeadByEmail(email) {
+  if (!email) return null;
+  if (!useSupabase) {
+    for (const lead of leads.values()) {
+      if (lead.email === email) return lead;
+    }
+    return null;
+  }
+
+  const { data, error } = await supabase.from(leadsTable).select("*").eq("email", email).maybeSingle();
   if (error) {
     throw error;
   }
@@ -287,7 +318,9 @@ async function listFacebookPages({ tenantId } = {}) {
 module.exports = {
   createLead,
   listLeads,
+  getLeadById,
   findLeadByMetaId,
+  findLeadByEmail,
   updateLeadStage,
   addLeadEvent,
   upsertFacebookPage,

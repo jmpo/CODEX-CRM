@@ -72,6 +72,41 @@ CRM Frontend (Kanban)
 4. Mapeo de stage → evento Meta.
 5. Se envía evento a Meta CAPI.
 
+### 3) Webhook saliente para n8n / Google Sheets (opcional)
+Cuando cambia la etapa, el backend puede enviar un webhook a n8n para orquestar
+integraciones (por ejemplo, actualizar un Google Sheet).
+
+**Variables de entorno**
+- `CRM_WEBHOOK_URL`: URL del webhook de n8n.
+- `CRM_WEBHOOK_SECRET`: secreto para firmar el payload (opcional).
+- `CRM_WEBHOOK_TIMEOUT_MS`: timeout en ms (opcional, default 5000).
+
+**Payload enviado**
+```json
+{
+  "event": "lead_stage_changed",
+  "event_id": "uuid",
+  "occurred_at": "2026-02-12T00:00:00.000Z",
+  "tenant_id": null,
+  "lead": {
+    "id": "uuid",
+    "meta_lead_id": "123456",
+    "full_name": "Juan Perez",
+    "email": "juan@mail.com",
+    "phone": "+5491112345678",
+    "source": "facebook"
+  },
+  "stage": {
+    "from": "nuevo",
+    "to": "cerrado_venta"
+  }
+}
+```
+
+**Firma (si `CRM_WEBHOOK_SECRET` está configurado)**
+- `x-crm-timestamp`: epoch seconds.
+- `x-crm-signature`: HMAC SHA-256 de `${timestamp}.${payload}`.
+
 ---
 
 ## Mapeo sugerido de etapas → eventos Meta

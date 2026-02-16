@@ -4,7 +4,11 @@
   "version": "0.1.0",
   "scripts": {
     "dev": "npm --prefix backend install && npm --prefix backend run dev",
+    "dev:all": "npm --prefix backend install && npm --prefix frontend install && concurrently \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
     "start": "npm --prefix backend run start",
     "install:all": "npm --prefix backend install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0"
   }
 }

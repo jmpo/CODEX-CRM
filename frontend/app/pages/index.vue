@@ -32,25 +32,98 @@
       </div>
     </section>
 
-    <section class="card form-card">
-      <strong>Meta Pages conectadas</strong>
-      <div class="status" v-if="pagesLoading">Cargando páginas...</div>
-      <div class="status" v-else-if="pagesError">Error: {{ pagesError }}</div>
-      <div class="pages" v-else>
-        <div v-if="pages.length === 0" class="status">
-          Aún no hay páginas conectadas. Usa “Conectar Meta”.
+    <section class="card tabs-card">
+      <div class="tabs">
+        <button
+          v-for="tab in tabs"
+          :key="tab.key"
+          class="tab-button"
+          :class="{ 'is-active': activeTab === tab.key }"
+          type="button"
+          @click="activeTab = tab.key"
+        >
+          {{ tab.label }}
+        </button>
+      </div>
+    </section>
+
+    <section v-if="activeTab === 'sheet'" class="card form-card sheet-card">
+      <div class="sheet-header">
+        <strong>Google Sheet (solo lectura)</strong>
+        <div class="sheet-actions">
+          <button class="btn btn-secondary" type="button" @click="loadSheet">
+            Refrescar sheet
+          </button>
+          <button
+            class="btn btn-primary"
+            type="button"
+            :disabled="sheetImporting"
+            @click="importSheet"
+          >
+            {{ sheetImporting ? 'Importando...' : 'Importar a Kanban' }}
+          </button>
         </div>
-        <div v-for="page in pages" :key="page.id" class="page-card">
-          <div>
-            <strong>{{ page.name || 'Página' }}</strong>
-            <span class="status">ID: {{ page.pageId }}</span>
-          </div>
-          <span class="tag">Meta</span>
+      </div>
+      <div class="status" v-if="sheetLoading">Cargando hoja...</div>
+      <div class="status" v-else-if="sheetError">Error: {{ sheetError }}</div>
+      <div class="status" v-else-if="sheetImportResult">
+        Importación: {{ sheetImportResult.created }} creados, {{ sheetImportResult.updated }}
+        actualizados, {{ sheetImportResult.skipped }} omitidos.
+      </div>
+      <div class="status" v-else-if="sheetImportError">Error: {{ sheetImportError }}</div>
+      <div v-else class="sheet-body">
+        <div class="sheet-meta">
+          <a
+            v-if="sheetUrl"
+            class="sheet-link"
+            :href="sheetUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Abrir Google Sheet
+          </a>
+          <span class="status">Pestaña: {{ sheetTab }}</span>
+          <span class="status">Filas: {{ sheetRows.length }}</span>
+        </div>
+        <div v-if="sheetRows.length === 0" class="status">Sin datos</div>
+        <div v-else class="sheet-table">
+          <table>
+            <thead>
+              <tr>
+                <th v-for="col in sheetColumns" :key="col">{{ col }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, idx) in sheetRows" :key="idx">
+                <td v-for="col in sheetColumns" :key="col">
+                  {{ row[col] ?? '' }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </section>
 
-    <section class="card form-card">
+    <div v-else class="kanban-panel">
+      <section class="card form-card">
+        <strong>Meta Pages conectadas</strong>
+        <div class="status" v-if="pagesLoading">Cargando páginas...</div>
+        <div class="status" v-else-if="pagesError">Error: {{ pagesError }}</div>
+        <div class="pages" v-else>
+          <div v-if="pages.length === 0" class="status">
+            Aún no hay páginas conectadas. Usa “Conectar Meta”.
+          </div>
+          <div v-for="page in pages" :key="page.id" class="page-card">
+            <div>
+              <strong>{{ page.name || 'Página' }}</strong>
+              <span class="status">ID: {{ page.pageId }}</span>
+            </div>
+            <span class="tag">Meta</span>
+          </div>
+        </div>
+      </section>
+      <section class="card form-card">
       <strong>Nuevo lead</strong>
       <div class="form-grid">
         <input
@@ -67,54 +140,64 @@
           {{ saving ? 'Guardando...' : 'Crear lead' }}
         </button>
       </div>
-    </section>
+      </section>
 
-    <section class="kanban">
-      <article
-        v-for="stage in stages"
-        :key="stage.key"
-        class="card column"
+      <div class="kanban-title">
+        <h2>Kanban</h2>
+        <span class="status">Arrastra los leads para cambiar de etapa.</span>
+      </div>
+
+      <section class="kanban">
+        <article
+          v-for="stage in stages"
+          :key="stage.key"
+          class="card column"
+          :data-stage="stage.key"
         :class="{ 'is-drop-target': drag.over === stage.key }"
         @dragover.prevent="onDragOver(stage.key)"
         @dragleave="onDragLeave(stage.key)"
         @drop="onDrop(stage.key)"
-      >
-        <div class="column-header">
-          <h3>{{ stage.label }}</h3>
-          <span class="count">{{ groupedLeads[stage.key].length }}</span>
-        </div>
-        <div v-if="groupedLeads[stage.key].length === 0" class="status">
-          Sin leads
-        </div>
-        <div
-          v-for="lead in groupedLeads[stage.key]"
-          :key="lead.id"
-          class="lead-card"
-          :class="{ 'is-dragging': drag.leadId === lead.id }"
-          draggable="true"
-          @dragstart="onDragStart(lead)"
-          @dragend="onDragEnd"
         >
-          <strong>{{ lead.fullName }}</strong>
-          <span v-if="lead.email">{{ lead.email }}</span>
-          <span v-else>Sin email</span>
-          <span v-if="lead.phone">{{ lead.phone }}</span>
-          <span v-else>Sin teléfono</span>
-          <div class="lead-actions">
-            <span class="tag">{{ lead.source }}</span>
-            <select
-              class="input"
-              :value="lead.stage"
-              @change="(event) => updateStage(lead.id, event.target.value)"
-            >
-              <option v-for="option in stages" :key="option.key" :value="option.key">
-                {{ option.label }}
-              </option>
-            </select>
+          <div class="column-header">
+            <h3>{{ stage.label }}</h3>
+            <span class="count">{{ groupedLeads[stage.key].length }}</span>
           </div>
-        </div>
-      </article>
-    </section>
+          <div class="column-body">
+            <div v-if="groupedLeads[stage.key].length === 0" class="status empty">
+              Sin leads
+            </div>
+            <div
+              v-for="lead in groupedLeads[stage.key]"
+              :key="lead.id"
+              class="lead-card"
+              :data-stage="lead.stage"
+              :class="{ 'is-dragging': drag.leadId === lead.id }"
+              draggable="true"
+              @dragstart="onDragStart(lead)"
+              @dragend="onDragEnd"
+            >
+              <strong>{{ lead.fullName }}</strong>
+              <span v-if="lead.email">{{ lead.email }}</span>
+              <span v-else>Sin email</span>
+              <span v-if="lead.phone">{{ lead.phone }}</span>
+              <span v-else>Sin teléfono</span>
+              <div class="lead-actions">
+                <span class="tag">{{ lead.source }}</span>
+                <select
+                  class="input"
+                  :value="lead.stage"
+                  @change="(event) => updateStage(lead.id, event.target.value)"
+                >
+                  <option v-for="option in stages" :key="option.key" :value="option.key">
+                    {{ option.label }}
+                  </option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </article>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -129,7 +212,21 @@ const error = ref('')
 const pages = ref([])
 const pagesLoading = ref(false)
 const pagesError = ref('')
+const sheetRows = ref([])
+const sheetColumns = ref([])
+const sheetLoading = ref(false)
+const sheetError = ref('')
+const sheetImporting = ref(false)
+const sheetImportResult = ref(null)
+const sheetImportError = ref('')
+const sheetUrl = ref('')
+const sheetTab = ref('')
 const tenantId = 'local'
+const activeTab = ref('kanban')
+const tabs = [
+  { key: 'kanban', label: 'Kanban' },
+  { key: 'sheet', label: 'Google Sheet' }
+]
 
 const form = reactive({
   fullName: '',
@@ -187,6 +284,40 @@ async function loadPages() {
     pagesError.value = err?.data?.error || err?.message || 'No se pudo cargar'
   } finally {
     pagesLoading.value = false
+  }
+}
+
+async function loadSheet() {
+  sheetLoading.value = true
+  sheetError.value = ''
+  try {
+    const response = await $fetch(`${apiBase}/integrations/sheets`)
+    const rows = response?.data || []
+    sheetRows.value = rows
+    sheetUrl.value = response?.sheetUrl || ''
+    sheetTab.value = response?.tab || ''
+    sheetColumns.value = rows.length > 0 ? Object.keys(rows[0]) : []
+  } catch (err) {
+    sheetError.value = err?.data?.error || err?.message || 'No se pudo cargar'
+  } finally {
+    sheetLoading.value = false
+  }
+}
+
+async function importSheet() {
+  sheetImporting.value = true
+  sheetImportError.value = ''
+  sheetImportResult.value = null
+  try {
+    const response = await $fetch(`${apiBase}/integrations/sheets/import`, {
+      method: 'POST'
+    })
+    sheetImportResult.value = response
+    await loadLeads()
+  } catch (err) {
+    sheetImportError.value = err?.data?.error || err?.message || 'No se pudo importar'
+  } finally {
+    sheetImporting.value = false
   }
 }
 
@@ -287,4 +418,5 @@ async function onDrop(stageKey) {
 
 onMounted(loadLeads)
 onMounted(loadPages)
+onMounted(loadSheet)
 </script>
